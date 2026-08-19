@@ -260,6 +260,17 @@ secret key and offline samples marked uninitialised):
   by the M4 pqm4 stack harness.
 - M4: added `falcon-lazy2/m4/` (pqm4 scheme + `speedoo.c` split harness); real
   STM32F407 cycles/flash/RAM captured (see the Cortex-M4 section).
+- Reps + comparison: added `falcon-lazy2/tests/bench_reps.cpp` (`falcon_bench_reps`),
+  a portable N-rep harness (default 1000) with fresh randomness per rep, timing
+  keygen/sign(offline/online)/sign_dyn/verify for the online/offline Falcon plus
+  ed25519 and Dilithium2; cross-platform runs on the Mac, the box (scalar +
+  AVX2) and the M7 in the new "Cross-platform performance" section. CMake now
+  builds cleanly on Apple arm64 (linker `--no-undefined` gated to non-Apple;
+  `dilithium/ref/randombytes.c` pulled in when the AVX2 lib is absent).
+- M7 mirror: added `falcon-lazy2/m7/` (platform `.mk`, scheme `config.h` FP
+  selector, `speedoo.c` at 100 reps, HAL and randombytes patches, README with
+  repro + gotchas). `speedoo.c` bumped to `OO_ITER=100`; F767 hardware RNG
+  enabled (`STM32F7` added to the pqm4 randombytes guard) so each rep is fresh.
 
 ## C10 (HIGH): the public online/offline signing API is incomplete
 
@@ -347,3 +358,148 @@ a one-time key-expand step saves <6% and isn't worth the API change.
    online step is transform-bound and near-minimal in C; on the M4 it is software
    double-emulation. Native hardware doubles are the large, safe win, and this is
    the next step.
+
+## Cortex-M7 results (STM32F767ZI, the FPU / native-double path)
+
+Done 2026-08-19 on a real NUCLEO-F767ZI (Cortex-M7, fpv5-**d16** double FPU),
+which the M4 lacks. This is the platform that exercises the paper's "FPU"
+(native double) path. Ported a pqm4 platform for it (`mk/nucleo-f767zi.mk` +
+STM32F767 branch in `common/hal-opencm3.c`); the same `speedoo.c` split harness
+as the M4. Clocked at 216 MHz off the HSI (the board's HSE routing is
+solder-bridge dependent), flash ART + prefetch on, and the **Cortex-M7 L1 I/D
+caches enabled** (see the cache note below). Cycle counts via SysTick; the
+figures below are confirmed by the 100-rep run in the cross-platform section
+(`OO_ITER=100`, fresh hardware RNG per rep), every rep `verify_ok=1`.
+
+Gotchas hit and fixed: libopencm3's genlink reports single-precision
+`fpv5-sp-d16` for the whole F7 family, so the FPU flags are overridden to
+`fpv5-d16` in the platform `.mk` (verified: the ELF has 200+ hardware `.f64`
+instructions in FPU mode, zero in EMU mode); `usart_set_baudrate()` mis-derives
+the USART3 kernel clock on the F7 so BRR is set directly; `hal_checkstack()`
+hangs on the F767 split RAM map so per-op stack measurement is disabled there;
+the M7 L1 caches need explicit enabling (only the flash ART is on by default).
+
+| op (216 MHz, cycles, L1 caches on) | M7 FPU (hw double) | M7 EMU (int emu) | FPU speedup |
+| --- | --- | --- | --- |
+| keygen | ~66M (42M-223M var) | ~103M (75M-493M var) | ~1.6x |
+| sign offline | 1.35M | 5.00M | 3.7x |
+| sign online | **1.14M** | 7.93M | **7.0x** |
+| sign_dyn (full ref Falcon) | 3.91M | 28.7M | 7.4x |
+| verify | 0.157M | 0.157M | ~1x (integer) |
+
+online vs full Falcon sign: **3.4x** cheaper (FPU), 3.6x (EMU) — matches the
+paper's 3.6x claim. The FPU helps the online phase most (7.0x) because it is
+FFT-bound (pure double FP); the offline gains less (3.7x) because it is
+sampler/integer-bound. This mirrors the paper's A53 EMU->FPU contrast.
+
+**The headline the M4 could not show:** the online phase drops from **10.52M on
+the M4 (single-precision FPU, doubles emulated) to 1.14M on the M7 (hardware
+double FPU) = 9.2x.** That is the concrete case for a double-FPU target.
+
+Cross-platform, online/offline Falcon (cycles, NIST-L1):
+
+| platform | FP mode | offline | online | full sign | verify |
+| --- | --- | --- | --- | --- | --- |
+| A53 rpi3 (paper) | EMU | ~5.7M | 10.04M | 35.36M | 172K |
+| A53 rpi3 (paper) | FPU | ~1.0M | 1.12M | 2.99M | 171K |
+| M4 STM32F407 | EMU (asm) | 7.24M | 10.52M | 39.6M | 174K |
+| M7 STM32F767 | EMU (C) | 5.00M | 7.93M | 28.7M | 157K |
+| M7 STM32F767 | FPU | 1.35M | **1.14M** | 3.91M | 157K |
+
+**With the L1 caches on, the M7-FPU essentially reproduces the paper's A53-FPU
+numbers** — online 1.14M vs 1.12M (within 2%), verify 157K vs 171K (M7 faster),
+offline 1.35M vs ~1.0M and full-sign 3.91M vs 2.99M (within ~30%, the offline
+sampler being the M7's relatively weaker spot). The M7 EMU row likewise tracks
+the A53 EMU row. So this is a faithful reproduction of the paper's headline FPU
+result on real M7 hardware, not just a ratio match.
+
+Cache effect (the reason the first pass looked ~2.4-4x high): enabling the M7 L1
+caches cut FPU online 2.72M->1.14M, offline 4.15M->1.35M, full-sign 9.10M->3.91M,
+verify 0.38M->0.157M, keygen ~3x. Note this also makes the earlier C-vs-asm EMU
+caveat moot: the M7 EMU (portable C) with caches (online 7.93M) is now faster
+than the M4 EMU (tuned asm, 10.52M).
+
+## Cross-platform performance with comparison schemes (>=100 reps, fresh randomness)
+
+This section consolidates before/after and the comparison signature schemes on
+the three machines actually run here (this Mac, the x86 box, the M7), each
+operation repeated many times with **fresh randomness per repetition** (a new
+key, a new message, a new offline token), the way the paper reports. Correctness
+is checked every repetition and was full on every platform (verify_ok
+1000/1000 on the hosts, 100/100 on the M7).
+
+New harness `falcon-lazy2/tests/bench_reps.cpp` (built as `falcon_bench_reps`,
+no google-benchmark dependency, so it runs on the Mac and the box): 1000
+independent reps by default, portable wall-clock time everywhere, invariant-TSC
+cycles additionally on x86. On the M7 the `speedoo.c` harness now does 100 reps
+(`OO_ITER=100`) and draws real entropy from the F767 hardware RNG each rep.
+
+**Units differ per platform (Mac = time, box = cycles + time, M7 = cycles); do
+not compare absolute numbers across platforms, only within a table.** The Mac
+and box comparison schemes are portable C / AVX2; the M7 comparison schemes are
+the pqm4 hand-optimised m4f (assembly) implementations, whereas the
+online/offline Falcon is the reference C, so on the M7 the comparison flatters
+ML-DSA-44 and FN-DSA-512.
+
+### This Mac (Apple Silicon, hardware double FPU, FALCON_FPNATIVE), 1000 reps
+
+Median microseconds. No before/after here: the general-C cleanup is perf-neutral
+(confirmed on the box) and AVX2 is x86-only, so the Mac is a new native-double
+**host baseline** datapoint, not an optimisation delta.
+
+| scheme / op | keygen | sign | verify |
+| --- | --- | --- | --- |
+| Falcon-OO-512 offline | 3064.4 | (offline) 79.08 | (verify) 3.54 |
+| Falcon-OO-512 online | | (online) **7.42** | |
+| Falcon-OO-512 full (sign_dyn) | | 118.1 | |
+| ed25519 | 12.17 | 12.54 | 38.17 |
+| Dilithium2 / ML-DSA-44 (ref C) | 35.17 | 126.2 | 39.13 |
+
+Online is 7.4 us, about 16x cheaper than the reference full Falcon sign (118 us),
+on a fast hardware double FPU. The online step alone also undercuts ed25519 and
+Dilithium signing, but that is only the per-message half of the split: the
+one-time offline precompute (79 us) has to be amortised, and offline+online
+together (about 86 us) is dearer than a single ed25519 sign (12.5 us).
+
+### x86 box (Xeon 8259CL), 1000 reps, median invariant-TSC cycles
+
+Before = scalar build, after = `FALCON_AVX2`+`FALCON_FMA` (lever I0). This
+reproduces the earlier before/after: offline **-44%**, sign_dyn **-27%**, online
+-6%.
+
+| scheme / op | keygen | sign | verify |
+| --- | --- | --- | --- |
+| Falcon-OO offline, scalar -> AVX2 | 20.42M -> 20.72M | 447,688 -> **251,268** | 33,918 -> 33,248 |
+| Falcon-OO online, scalar -> AVX2 | | 74,754 -> **70,602** | |
+| Falcon-OO full (sign_dyn), scalar -> AVX2 | | 676,122 -> 496,824 | |
+| ed25519 | 97,792 | 100,726 | 330,172 |
+| Dilithium2 / ML-DSA-44 (ref C) | 237,384 | 862,164 | 265,128 |
+| Dilithium2 / ML-DSA-44 (AVX2) | 84,720 | 192,250 | 87,862 |
+
+Dilithium sign has high variance from rejection sampling (ref sign min 455,670,
+avx2 min 108,728). The online step (71K-75K cycles) is the cheapest single
+signing operation in the table, below ed25519 sign and about 9x below the
+reference full Falcon sign. As on the other platforms that is only the
+per-message half: offline+online together (about 522K cycles scalar) exceeds an
+ed25519 sign (101K).
+
+### M7 (STM32F767 @ 216 MHz, L1 caches on), 100 reps, median cycles
+
+Before = `FALCON_FPEMU` (software double, what the M4-autodetect would pick),
+after = `FALCON_FPNATIVE` (hardware double FPU). ed25519 is not in pqm4 (N/A).
+
+| scheme / op | keygen | sign | verify |
+| --- | --- | --- | --- |
+| Falcon-OO offline, EMU -> FPU | 103M -> 66.0M | 5.00M -> **1.35M** (3.7x) | 0.157M -> 0.157M |
+| Falcon-OO online, EMU -> FPU | | 7.93M -> **1.14M** (7.0x) | |
+| Falcon-OO full (sign_dyn), EMU -> FPU | | 28.7M -> 3.91M (7.4x) | |
+| ML-DSA-44 (m4f, optimised) | 1.05M | 2.32M | 1.05M |
+| FN-DSA-512 (m4f, optimised Falcon) | 47.7M | 19.3M | 0.313M |
+
+The FPU online (1.14M) reproduces the paper's A53 FPU online (about 1.12M) to
+within 2%. Against the optimised standard schemes the online/offline Falcon
+online phase (1.14M) is cheaper than ML-DSA-44 sign (2.32M) and far cheaper than
+FN-DSA-512 sign (19.3M), though the offline (1.35M) plus online is a one-time
+plus per-message split, and these comparators are hand-optimised asm while
+Falcon-OO here is reference C. Verify is integer-only so identical across the two
+FP backends. Repro and gotchas: `falcon-lazy2/m7/`.

@@ -1,0 +1,187 @@
+diff --git a/common/hal-opencm3.c b/common/hal-opencm3.c
+index 05d7377..600c995 100644
+--- a/common/hal-opencm3.c
++++ b/common/hal-opencm3.c
+@@ -2,11 +2,12 @@
+ #include "hal.h"
+ #include <sys/cdefs.h>
+ 
+-#define SERIAL_BAUD 38400
++#define SERIAL_BAUD 115200
+ 
+ #include <libopencm3/cm3/dwt.h>
+ #include <libopencm3/cm3/nvic.h>
+ #include <libopencm3/cm3/systick.h>
++#include <libopencm3/cm3/scb.h>
+ 
+ #if defined(STM32F407VG)
+ 
+@@ -99,6 +100,32 @@ void _rcc_set_main_pll(uint32_t source, uint32_t pllm, uint32_t plln, uint32_t p
+ 		(pllr << RCC_PLLCFGR_PLLR_SHIFT) | RCC_PLLCFGR_PLLREN;
+ }
+ 
++#elif defined(STM32H723ZG)
++#include <libopencm3/stm32/rcc.h>
++#include <libopencm3/stm32/gpio.h>
++#include <libopencm3/stm32/usart.h>
++#include <libopencm3/stm32/flash.h>
++#include <libopencm3/stm32/rng.h>
++#include <libopencm3/stm32/pwr.h>
++
++#define SERIAL_GPIO GPIOD
++#define SERIAL_USART USART3
++#define SERIAL_PINS (GPIO8 | GPIO9)
++#define NUCLEO_H723_BOARD
++
++#elif defined(STM32F767ZI)
++#include <libopencm3/stm32/rcc.h>
++#include <libopencm3/stm32/gpio.h>
++#include <libopencm3/stm32/usart.h>
++#include <libopencm3/stm32/flash.h>
++#include <libopencm3/stm32/rng.h>
++
++/* NUCLEO-F767ZI ST-Link virtual COM port is USART3 on PD8 (TX) / PD9 (RX). */
++#define SERIAL_GPIO GPIOD
++#define SERIAL_USART USART3
++#define SERIAL_PINS (GPIO8 | GPIO9)
++#define NUCLEO_F767_BOARD
++
+ #else
+ #error Unsupported libopencm3 board
+ #endif
+@@ -285,6 +312,63 @@ static void clock_setup(enum clock_mode clock)
+   rcc_periph_clock_enable(RCC_RNG);
+   rcc_set_clock48_source(RCC_CCIPR_CLK48SEL_HSI48);
+   rng_enable();
++#elif defined(NUCLEO_F767_BOARD)
++  /* Clock from the internal 16 MHz HSI (always present and accurate), NOT the
++     HSE: on the NUCLEO-F767ZI whether HSE is routed from the ST-Link MCO
++     depends on solder bridges, and a wrong HSE gives a wrong PLL and garbled
++     UART. rcc_clock_setup_hsi uses pllm=16 with these presets, so PLL48CLK =
++     48 MHz (RNG) and APB1 = 54 MHz at 216 MHz as expected. */
++  switch (clock) {
++  case CLOCK_BENCHMARK:
++    rcc_clock_setup_hsi(&rcc_3v3[RCC_CLOCK_3V3_24MHZ]);
++    _clock_freq = 24000000;
++    break;
++  case CLOCK_FAST:
++  default:
++    rcc_clock_setup_hsi(&rcc_3v3[RCC_CLOCK_3V3_216MHZ]);
++    _clock_freq = 216000000;
++    break;
++  }
++  flash_art_enable();
++  flash_prefetch_enable();
++  rcc_periph_clock_enable(RCC_RNG);
++  rng_enable();
++
++  /* Enable the Cortex-M7 L1 caches (separate from the flash ART accelerator).
++     The I-cache is a large win for this flash-resident compute kernel; the
++     D-cache speeds the SRAM-resident FFT/sampler data. This workload has no DMA
++     and no self-modifying code, so no runtime coherency management is needed. */
++  __asm volatile ("dsb"); __asm volatile ("isb");
++  SCB_ICIALLU = 0;                         /* invalidate entire I-cache */
++  __asm volatile ("dsb"); __asm volatile ("isb");
++  SCB_CCR |= SCB_CCR_IC;                   /* enable I-cache */
++  __asm volatile ("dsb"); __asm volatile ("isb");
++  /* invalidate entire D-cache by set/way (M7: 4-way), then enable */
++  SCB_CCSELR = 0;
++  __asm volatile ("dsb");
++  {
++    uint32_t ccsidr = SCB_CCSIDR;
++    uint32_t sets = (ccsidr >> 13) & 0x7FFFu;   /* NumSets-1  */
++    do {
++      uint32_t ways = (ccsidr >> 3) & 0x3FFu;   /* Associativity-1 */
++      do {
++        SCB_DCISW = ((sets & 0x1FFu) << 5) | ((ways & 0x3u) << 30);
++      } while (ways-- != 0u);
++    } while (sets-- != 0u);
++  }
++  __asm volatile ("dsb");
++  SCB_CCR |= SCB_CCR_DC;                    /* enable D-cache */
++  __asm volatile ("dsb"); __asm volatile ("isb");
++#elif defined(NUCLEO_H723_BOARD)
++  (void) clock;
++  _clock_freq = 64000000;
++
++  /* HSI48 for RNG */
++  RCC_CR |= RCC_CR_HSI48ON;
++  while (!(RCC_CR & RCC_CR_HSI48RDY));
++  RCC_D2CCIP2R &= ~(3u << 8);
++  rcc_periph_clock_enable(RCC_RNG);
++  rng_enable();
+ #else
+ #error Unsupported platform
+ #endif
+@@ -318,6 +402,40 @@ void usart_setup()
+   usart_disable_rx_interrupt(SERIAL_USART);
+   usart_disable_tx_interrupt(SERIAL_USART);
+   usart_enable(SERIAL_USART);
++#elif defined(NUCLEO_H723_BOARD)
++  rcc_periph_clock_enable(RCC_GPIOD);
++  rcc_periph_clock_enable(RCC_USART3);
++
++  gpio_set_output_options(SERIAL_GPIO, GPIO_OTYPE_PP, GPIO_OSPEED_100MHZ, SERIAL_PINS);
++  gpio_set_af(SERIAL_GPIO, GPIO_AF7, SERIAL_PINS);
++  gpio_mode_setup(SERIAL_GPIO, GPIO_MODE_AF, GPIO_PUPD_NONE, SERIAL_PINS);
++  USART_BRR(SERIAL_USART) = 64000000UL / SERIAL_BAUD;
++  usart_set_databits(SERIAL_USART, 8);
++  usart_set_stopbits(SERIAL_USART, USART_STOPBITS_1);
++  usart_set_mode(SERIAL_USART, USART_MODE_TX_RX);
++  usart_set_parity(SERIAL_USART, USART_PARITY_NONE);
++  usart_set_flow_control(SERIAL_USART, USART_FLOWCONTROL_NONE);
++  usart_disable_rx_interrupt(SERIAL_USART);
++  usart_disable_tx_interrupt(SERIAL_USART);
++  usart_enable(SERIAL_USART);
++#elif defined(NUCLEO_F767_BOARD)
++  rcc_periph_clock_enable(RCC_GPIOD);
++  rcc_periph_clock_enable(RCC_USART3);
++
++  gpio_set_output_options(SERIAL_GPIO, GPIO_OTYPE_PP, GPIO_OSPEED_100MHZ, SERIAL_PINS);
++  gpio_set_af(SERIAL_GPIO, GPIO_AF7, SERIAL_PINS);
++  gpio_mode_setup(SERIAL_GPIO, GPIO_MODE_AF, GPIO_PUPD_NONE, SERIAL_PINS);
++  /* usart_set_baudrate() mis-derives the USART3 kernel clock on the F7, so set
++     BRR directly: USART3 is on PCLK1 (APB1) at reset (UART3SEL=00). */
++  USART_BRR(SERIAL_USART) = rcc_apb1_frequency / SERIAL_BAUD;
++  usart_set_databits(SERIAL_USART, 8);
++  usart_set_stopbits(SERIAL_USART, USART_STOPBITS_1);
++  usart_set_mode(SERIAL_USART, USART_MODE_TX_RX);
++  usart_set_parity(SERIAL_USART, USART_PARITY_NONE);
++  usart_set_flow_control(SERIAL_USART, USART_FLOWCONTROL_NONE);
++  usart_disable_rx_interrupt(SERIAL_USART);
++  usart_disable_tx_interrupt(SERIAL_USART);
++  usart_enable(SERIAL_USART);
+ #else
+ #error Unsupported platform
+ #endif
+@@ -353,6 +471,12 @@ void hal_setup(const enum clock_mode clock)
+   usart_setup();
+   systick_setup();
+ 
++#if defined(DISCOVERY_BOARD)
++  rcc_periph_clock_enable(RCC_GPIOD);
++  gpio_mode_setup(GPIOD, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE,
++                  GPIO12 | GPIO13 | GPIO14 | GPIO15);
++#endif
++
+   // wait for the first systick overflow
+   // improves reliability of the benchmarking scripts since it makes it much
+   // less likely that the host will miss the start of the output
+@@ -360,6 +484,17 @@ void hal_setup(const enum clock_mode clock)
+   while(old == overflowcnt);
+ }
+ 
++#if defined(DISCOVERY_BOARD)
++static const uint16_t _led_pins[] = {GPIO12, GPIO13, GPIO14, GPIO15};
++void hal_led_on(int led) { gpio_set(GPIOD, _led_pins[led & 3]); }
++void hal_led_off(int led) { gpio_clear(GPIOD, _led_pins[led & 3]); }
++void hal_led_toggle(int led) { gpio_toggle(GPIOD, _led_pins[led & 3]); }
++#else
++void hal_led_on(int led) { (void)led; }
++void hal_led_off(int led) { (void)led; }
++void hal_led_toggle(int led) { (void)led; }
++#endif
++
+ void hal_send_str(const char* in)
+ {
+   const char* cur = in;
