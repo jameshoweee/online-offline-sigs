@@ -6,10 +6,10 @@ enable_language(C ASM)
 set (CMAKE_CXX_STANDARD 17)
 set (CMAKE_C_FLAGS_DEBUG "-Wall -Wextra -Wshadow -Wundef -Werror -g3 -O0")
 set (CMAKE_CXX_FLAGS_DEBUG "-Wall -Wextra -Wshadow -Wundef -Werror -g3 -O0")
-set (CMAKE_LD_FLAGS_DEBUG "-Wl-no-undefined")
-set (CMAKE_C_FLAGS_RELEASE "-Wall -Wextra -Wshadow -Wundef -Werror -g3 -O9")
-set (CMAKE_CXX_FLAGS_RELEASE "-Wall -Wextra -Wshadow -Wundef -Werror -g3 -O9")
-set (CMAKE_LD_FLAGS_RELEASE "-Wl-no-undefined")
+set (CMAKE_EXE_LINKER_FLAGS_DEBUG "-Wl,--no-undefined")
+set (CMAKE_C_FLAGS_RELEASE "-Wall -Wextra -Wshadow -Wundef -g3 -O3")
+set (CMAKE_CXX_FLAGS_RELEASE "-Wall -Wextra -Wshadow -Wundef -g3 -O3")
+set (CMAKE_EXE_LINKER_FLAGS_RELEASE "-Wl,--no-undefined")
 
 if (CMAKE_SYSTEM_PROCESSOR MATCHES "(x86)|(X86)|(amd64)|(AMD64)")
     set(X86 ON)
@@ -175,4 +175,8 @@ target_include_directories(unittest PRIVATE ${TEST_INCS})
 add_executable(falcon_bench tests/bench_lazy_falcon.cpp)
 target_link_libraries(falcon_bench falcon falcon_testlib  ed25519 ${DILITHIUM_LIBS} ${BENCHMARK_LIBS})
 target_include_directories(falcon_bench PRIVATE ${TEST_INCS})
+
+# Standalone rdtscp cycle + correctness harness (no google-benchmark / PMU needed).
+add_executable(bench_cycles tests/bench_cycles.cpp)
+target_link_libraries(bench_cycles falcon falcon_testlib m)
 

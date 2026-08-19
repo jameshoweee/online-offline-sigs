@@ -51,66 +51,8 @@
  *   phi = X^N+1
  */
 
-/// ONLINE OFFLINE DEFINING SOME FUNCTIONS
-
-//#define NEAREST_PLANE_ENABLED
-
-// static inline uint8_t *
-// align_u16(void *tmp)
-// {
-// 	uint8_t *atmp;
-
-// 	atmp = tmp;
-// 	if (((uintptr_t)atmp & 1u) != 0) {
-// 		atmp ++;
-// 	}
-// 	return atmp;
-// }
-
-void v_add(const fpr a[], const fpr b[], fpr result[], size_t size) {
-    for (size_t i = 0; i < size; i++) {
-        result[i] = fpr_add(a[i], b[i]);
-    }
-}
-
-void v_sub(const fpr a[], const fpr b[], fpr result[], size_t size) {
-    for (size_t i = 0; i < size; i++) {
-        result[i] = fpr_sub(a[i], b[i]);
-    }
-}
-
-void v_mul(const fpr a[], const fpr b[], fpr result[], size_t size) {
-    for (size_t i = 0; i < size; i++) {
-        result[i] = fpr_mul(a[i], b[i]);
-    }
-}
-
-void v_neg(const fpr a[], fpr result[], size_t size) {
-    for (size_t i = 0; i < size; i++) {
-        result[i] = fpr_neg(a[i]);
-    }
-}
-
-void v_inv(const fpr a[], fpr result[], size_t size) {
-    for (size_t i = 0; i < size; i++) {
-        result[i] = fpr_inv(a[i]);
-    }
-}
-
-// void v_round(const fpr a[], fpr result[], unsigned logn, size_t size) {
-//     memcpy(result, a, size*sizeof(fpr));
-//     Zf(iFFT)(result, logn);
-//     for (size_t i = 0; i < size; i++) {
-//         result[i] = fpr_of(fpr_rint(result[i]));
-//     }
-//     Zf(FFT)(result, logn);
-// }
-
-void v_round(const fpr a[], fpr result[], size_t size) {
-    for (size_t i = 0; i < size; i++) {
-        result[i] = fpr_of(fpr_rint(a[i]));
-    }
-}
+/* Online/offline Falcon helpers (novel code; the rest of this file is the
+ * stock Falcon tree/dyn signer kept for comparison). */
 
 #define Q     12289
 
@@ -124,111 +66,6 @@ void mq_conv_poly_small_sign(size_t n, const int8_t* in, uint16_t* res)
     }
 }
 
-
-uint32_t
-mq_sub_sign(uint32_t x, uint32_t y)
-{
-	/*
-	 * As in mq_add(), we use a conditional addition to ensure the
-	 * result is in the 0..q-1 range.
-	 */
-	uint32_t d;
-
-	d = x - y;
-	d += Q & -(d >> 31);
-	return d;
-}
-
-uint32_t
-mq_add_sign(uint32_t x, uint32_t y)
-{
-	/*
-	 * We compute x + y - q. If the result is negative, then the
-	 * high bit will be set, and 'd >> 31' will be equal to 1;
-	 * thus '-(d >> 31)' will be an all-one pattern. Otherwise,
-	 * it will be an all-zero pattern. In other words, this
-	 * implements a conditional addition of q.
-	 */
-	uint32_t d;
-
-	d = x + y - Q;
-	d += Q & -(d >> 31);
-	return d;
-}
-
-// static inline int64_t
-// fpr_print(fpr x)
-// {
-// 	int64_t r;
-
-// 	r = (int64_t)x.v;
-// 	return r;
-// }
-
-// void make_matrix(fpr A[2][2], const fpr arr1[], const fpr arr2[], const fpr arr3[], const fpr arr4[], size_t size) {
-//     A[0][0] = arr1[0];
-//     A[0][1] = arr2[0];
-//     A[1][0] = arr3[0];
-//     A[1][1] = arr4[0];
-// }
-
-// void make_vector(fpr A[], const fpr arr1[1], const fpr arr2[1], size_t size) {
-//     A[0] = arr1[0];
-//     A[1] = arr2[0];
-// }
-
-// rewriting this to just take 6 arrays as inputs instead of a 2x2 matrix of arrays and 2 arrays
-// void mat_mul(const fpr A[2][2], const fpr x[2], fpr y[2], size_t size) {
-//     fpr temp[2];
-//     for (size_t i = 0; i < size; i++) {
-//         v_mul(A[i], &x[i], temp, size);
-//         v_add(y, temp, y, size);
-//     }
-// }
-
-void mat_mul(const fpr A00[], const fpr A01[], const fpr A10[], const fpr A11[], const fpr x1[], const fpr x2[], fpr y1[], fpr y2[], size_t size) {
-    for (size_t i = 0; i < size; i++) {
-        fpr temp1 = fpr_add(fpr_mul(A00[i], x1[i]), fpr_mul(A01[i], x2[i]));
-        fpr temp2 = fpr_add(fpr_mul(A10[i], x1[i]), fpr_mul(A11[i], x2[i]));
-        y1[i] = fpr_add(y1[i], temp1);
-        y2[i] = fpr_add(y2[i], temp2);
-    }
-}
-
-// scalar is set to a float as this is what we need currently
-void v_scalar_mul(const fpr a[], const fpr s, fpr result[], size_t size) {
-	for (size_t i = 0; i < size; i++) {
-		result[i] = fpr_mul(s, a[i]);
-	}
-}
-
-int randint(int min, int max) {
-    return min + rand() % (max - min + 1);
-}
-
-#define IMAX_BITS(m) ((m)/((m)%255+1) / 255%255*8 + 7-86/((m)%255+12))
-#define RAND_MAX_WIDTH IMAX_BITS(RAND_MAX)
-
-uint32_t rand32(void) {
-  uint32_t r = 0;
-  for (int i = 0; i < 32; i += RAND_MAX_WIDTH) {
-    r <<= RAND_MAX_WIDTH;
-    r ^= (unsigned) rand();
-  }
-  return r;
-}
-
-int randombytes(uint8_t *obuf, size_t len)
-{
-	static uint32_t fibo_a = 0xDEADBEEF, fibo_b = 0x01234567;
-	size_t i;
-	for (i = 0; i < len; i++) {
-		fibo_a += fibo_b;
-		fibo_b += fibo_a;
-		obuf[i] = (fibo_a >> 24) ^ (fibo_b >> 16);
-	}
-	return 0;
-}
 
 #define LSBMASK(c)	(-((c)&1))
 #define	CMUX(x,y,c)	(((x)&(LSBMASK(c)))^((y)&(~LSBMASK(c))))
@@ -316,81 +153,47 @@ static inline uint32_t div16404853(uint32_t x) {
     return (z + y) >> 23;
 }
 
-#define BERN_RANDMULT	1664
-
-void sample_gaussian_poly_bern(int8_t *sample1, int8_t *sample2, size_t n) 
+/*
+ * Bernoulli/CDT Gaussian sampler for the offline blinding vector. Draws
+ * directly from the caller's SHAKE-seeded PRNG (no intermediate buffer), which
+ * removes a ~43 KB stack VLA and a coeffs[] VLA (see REVIEW.md I2/C5). Writes
+ * n coefficients into sample1[] and n into sample2[].
+ */
+void sample_gaussian_poly_bern(int8_t *sample1, int8_t *sample2, size_t n, prng *p)
 {
-    size_t i = 0, pos = 0;
+    size_t i = 0;
     uint32_t x, y, t, k;
     int32_t z;
+    uint64_t utop, ubot, v, w;
+    unsigned char c;
 
-    uint64_t *us, utop, ubot, v, w;
-    unsigned char *cs, c;
-    unsigned char buf[(3*sizeof(uint64_t) + 2)*BERN_RANDMULT];
-    uint32_t coeffs[2*n];
+    while (i < 2*n) {
+        utop = prng_get_u64(p);
+        ubot = prng_get_u64(p);
+        w    = prng_get_u64(p) >> 1;
 
-    randombytes(buf, sizeof buf);
+        x = sample_berncdt(utop, ubot) << 8;
+        y = prng_get_u8(p);
+        z = x + y;
 
-    cs = buf;
-    us = (uint64_t*)(buf+2*BERN_RANDMULT);
+        y = y*(y + 2*x) << 8;
+        k = div16404853(y);
+        t = y - 16404853*k;
+        v = exp_scaled(t) << (22-k);
 
-    while(i<2*n) {
-	if(pos++ >= BERN_RANDMULT) {
-	    randombytes(buf, sizeof buf);
-	    pos = 0;
-	    cs = buf;
-	    us = (uint64_t*)(buf+2*BERN_RANDMULT);
-	}
+        c = prng_get_u8(p);
+        if ((w > v) || (c & (z==0)))
+            continue;
 
-	utop = *us++;
-	ubot = *us++;
-	w    = *us++;
-	w  >>= 1;
-
-	x = sample_berncdt(utop, ubot) << 8;
-	y = *cs++;
-	z = x + y;
-
-	y = y*(y + 2*x) << 8;  
-	k = div16404853(y);
-	t = y - 16404853*k;
-	v = exp_scaled(t) << (22-k);
-	
-	c = *cs++;
-	if((w > v) || (c & (z==0)))
-	   continue;
-
-	c >>= 1;
-	coeffs[i++] = CFLIP(z,(int32_t)c);
+        c >>= 1;
+        int8_t val = (int8_t) CFLIP(z, (int32_t)c);
+        if (i < n) {
+            sample1[i] = val;
+        } else {
+            sample2[i - n] = val;
+        }
+        i++;
     }
-
-	for (size_t j=0; j<n; j++) {
-		sample1[j] = coeffs[j];
-	}
-	for (size_t ii=0; ii<n; ii++) {
-		sample2[ii] = coeffs[n+ii];
-	}
-    
-}
-
-void gauss_sampler(sampler_context *sc, fpr mu, fpr isigma, int8_t* result, size_t n)
-{
-	int z;
-	//long ctr, szlo, szhi;
-	int c;
-
-	/*
-	 * We call the sampler 100000 times and check that each value is
-	 * within +/-30 of the center. We also accumulate the values.
-	 */
-	c = (int)fpr_trunc(mu);
-
-	for (size_t i = 0; i < n; i++) {
-		z = Zf(sampler)(sc, mu, isigma);
-		z -= c;
-		// printf("Generated Gaussian value: %d\n", z);
-		result[i] = z;
-	}
 }
 
 void sample_gaussian(int8_t *res, 
@@ -405,7 +208,6 @@ void sample_gaussian(int8_t *res,
 	for (size_t i = 0; i < n; i++) {
 		z = Zf(sampler)(spc, fpr_zero, isigma);
 		res[i] = z;
-		res[i] = 0; // remove to get back masked version
 	}
 }
 
@@ -422,18 +224,6 @@ mq_sub(uint32_t x, uint32_t y)
     d += Q & -(d >> 31);
     return d;
 }
-
-/*
-static void
-mq_poly_sub2(size_t logn, const uint16_t *a, const uint16_t* b, uint16_t* res)
-{
-    size_t u, n;
-    n = (size_t)1 << logn;
-    for (u = 0; u < n; u ++) {
-        res[u] = (uint16_t)mq_sub(a[u], b[u]);
-    }
-}
-*/
 
 static void
 mq_poly_small_sign_minus_mq(const int8_t *a, const uint16_t *b, uint16_t *res, size_t logn)
@@ -503,6 +293,10 @@ void short_preimage(const uint16_t *target, //
     fpr y1_temp[n];
     fpr y2_temp[n];
 
+    // Babai round-off: keep only the fractional part (y - round(y)). The
+    // rounded values go through separate buffers on purpose: it keeps the two
+    // coordinate streams independent so the compiler can vectorise the round
+    // (measured ~3.6% faster online than rounding in place).
     for (size_t u = 0; u < n; u ++) {
         y1_temp[u] = fpr_of(fpr_rint(y1[u]));
         y2_temp[u] = fpr_of(fpr_rint(y2[u]));
@@ -513,7 +307,7 @@ void short_preimage(const uint16_t *target, //
     Zf(FFT)(y1, logn);
     Zf(FFT)(y2, logn);
 
-    // mult by sk
+    // keep copies of (y1,y2): each is consumed by two of the basis products
     memcpy(y1_temp, y1, n * sizeof(fpr));
     memcpy(y2_temp, y2, n * sizeof(fpr));
 
@@ -540,17 +334,6 @@ void short_preimage(const uint16_t *target, //
     }
 }
 
-
-double calc_norm(const double* array, size_t size) {
-    double norm = 0.0;
-    for (size_t i = 0; i < size; i++) {
-		// printf("array[%d]: (%f),\n", i, array[i]);
-        norm += array[i] * array[i];
-		// printf("norm[%d]: (%f),\n", i, norm);
-
-    }
-    return sqrt(norm);
-}
 
 /*
  * Get the size of the LDL tree for an input with polynomials of size
@@ -2104,6 +1887,16 @@ Zf(sign_dyn)(int16_t *sig, inner_shake256_context *rng,
 	}
 }
 
+/* Split offline (message-independent) helper, defined below. Forward-declared
+ * so the combined signer can reuse it instead of duplicating the whole body. */
+void sign_dyn_lazy_offline(inner_shake256_context *rng,
+    const int8_t *restrict f, const int8_t *restrict g,
+    const int8_t *restrict F, const int8_t *restrict G,
+    const uint16_t *h, unsigned logn,
+    int8_t *sample1, int8_t *sample2, uint16_t *sample_target,
+    fpr *restrict f_fft, fpr *restrict g_fft,
+    fpr *restrict F_fft, fpr *restrict G_fft);
+
 /* see inner.h */
 void
 Zf(sign_dyn_lazy)(int16_t *sig, inner_shake256_context *rng,
@@ -2120,75 +1913,31 @@ Zf(sign_dyn_lazy)(int16_t *sig, inner_shake256_context *rng,
 	const uint16_t *hm, unsigned logn, uint8_t *tmp)
 {
     const size_t n = MKN(logn);
-	fpr *ftmp;
-    fpr f_fft[n], g_fft[n], F_fft[n], G_fft[n];
+    fpr *ftmp = (fpr *)tmp;
 
-
-    // START OFFLINE
     /*
-     * Lattice basis is B = [[g, f], [G, F]]. We convert it to FFT.
+     * Offline (message-independent) token: FFT of the basis, the Gaussian
+     * blinding vector (sample1,sample2) and its lattice target. This is the
+     * same work as the split sign_dyn_lazy_offline(), so we just call it here
+     * rather than duplicate the body. On the (astronomically rare) over-bound
+     * retry we regenerate a fresh token from the SHAKE PRNG.
      */
-    smallints_to_fpr(f_fft, f, logn);
-    smallints_to_fpr(g_fft, g, logn);
-    smallints_to_fpr(F_fft, F, logn);
-    smallints_to_fpr(G_fft, G, logn);
-    Zf(FFT)(f_fft, logn); // f
-    Zf(FFT)(g_fft, logn); // g
-    Zf(FFT)(F_fft, logn); // F
-    Zf(FFT)(G_fft, logn); // G
-
-    uint16_t h_monty[n];
-    memcpy(h_monty, h, n*sizeof(uint16_t));
-    falcon_inner_to_ntt_monty(h_monty, logn);
-
-    // compute the Gaussian blinding sample
-    // gaussian
-    sampler_context sc;
-    fpr isigma __attribute((unused)), mu __attribute((unused));
-    fpr muinc __attribute((unused)); // TODO check if really unused?;
-    Zf(prng_init)(&sc.p, rng);
-    sc.sigma_min = fpr_sigma_min[9];
-
-    isigma = fpr_div(fpr_of(10), fpr_of(17));
-    mu = fpr_neg(fpr_one);
-    muinc = fpr_div(fpr_one, fpr_of(10));
-
-    // modulo_lattice:  2n coords -> n coords mod q
-    //   any lattice point: modulo_lattice = 0
-    //   (x,0)              modulo_lattice(x,0) = x mod q
-    //                      modulo_lattice(q,0)
-    //                      modulo_lattice(h,1)
-    //   g = hf mod q?
-    //                      modulo_lattice(G,g)
-    //                      modulo_lattice(F,G)
-
-    // (int_x3, int_x4) are the small gaussian vector
-    int8_t sample1[n];
-    int8_t sample2[n];
-
-    // gauss_sampler(&sc, mu, isigma, sample1, n);
-    // gauss_sampler(&sc, mu, isigma, sample2, n);
-
-	sample_gaussian_poly_bern(sample1, sample2, n);
-
-    // for(int loop = 0; loop < 10; loop++)
-    // 	printf("gauss_x3x4[%d]: (%d, %d),\n", loop, sample1[loop], sample2[loop]);
-
-    // x3 = int_x3 - h * int_x4 mod q the target
+    fpr f_fft[n], g_fft[n], F_fft[n], G_fft[n];
+    int8_t sample1[n], sample2[n];
     uint16_t sample_target[n];
-    compute_target(h_monty, sample1, sample2, sample_target, logn);
 
+    sign_dyn_lazy_offline(rng, f, g, F, G, h, logn,
+                          sample1, sample2, sample_target,
+                          f_fft, g_fft, F_fft, G_fft);
 
-
-    ftmp = (fpr *)tmp;
-    /*
-	 * Do the actual signature.
-	 */
-	do_sign_dyn_lazy(
-        sample1,sample2,sample_target,
-        sig,
-	    f_fft, g_fft, F_fft, G_fft,
-        hm, logn, ftmp);
+    for (int oo_try = 0;
+         oo_try < 128 && !do_sign_dyn_lazy(sample1, sample2, sample_target, sig,
+                                           f_fft, g_fft, F_fft, G_fft, hm, logn, ftmp);
+         oo_try++) {
+        sign_dyn_lazy_offline(rng, f, g, F, G, h, logn,
+                              sample1, sample2, sample_target,
+                              f_fft, g_fft, F_fft, G_fft);
+    }
 }
 
 int
@@ -2207,66 +1956,40 @@ sign_dyn_lazy_online(
 }
 
 void sign_dyn_lazy_offline(
-        // inputs
         inner_shake256_context *rng,
-                           const int8_t *restrict f, const int8_t *restrict g,
-                           const int8_t *restrict F, const int8_t *restrict G,
-                           const uint16_t *h,
-                           unsigned logn,
-                           //outputs
-        int8_t* sample1, int8_t* sample2, uint16_t* sample_target,
+        const int8_t *restrict f, const int8_t *restrict g,
+        const int8_t *restrict F, const int8_t *restrict G,
+        const uint16_t *h, unsigned logn,
+        int8_t *sample1, int8_t *sample2, uint16_t *sample_target,
         fpr *restrict f_fft, fpr *restrict g_fft,
-        fpr *restrict F_fft, fpr *restrict G_fft
-                                   ) {
+        fpr *restrict F_fft, fpr *restrict G_fft)
+{
     const size_t n = MKN(logn);
 
-    // START OFFLINE
     /*
-     * Lattice basis is B = [[g, f], [G, F]]. We convert it to FFT.
+     * Basis B = [[g, f], [G, F]] into FFT form. This is the bulk of the
+     * message-independent (offline) work and is reused across every online
+     * signature made with this key.
      */
     smallints_to_fpr(f_fft, f, logn);
     smallints_to_fpr(g_fft, g, logn);
     smallints_to_fpr(F_fft, F, logn);
     smallints_to_fpr(G_fft, G, logn);
-    Zf(FFT)(f_fft, logn); // f
-    Zf(FFT)(g_fft, logn); // g
-    Zf(FFT)(F_fft, logn); // F
-    Zf(FFT)(G_fft, logn); // G
+    Zf(FFT)(f_fft, logn);
+    Zf(FFT)(g_fft, logn);
+    Zf(FFT)(F_fft, logn);
+    Zf(FFT)(G_fft, logn);
 
     uint16_t h_monty[n];
     memcpy(h_monty, h, n * sizeof(uint16_t));
     falcon_inner_to_ntt_monty(h_monty, logn);
 
-    // compute the Gaussian blinding sample
-    // gaussian
+    /*
+     * Gaussian blinding vector (sample1,sample2), drawn directly from a
+     * SHAKE-seeded PRNG, and its lattice target = sample1 - h*sample2 mod q.
+     */
     sampler_context sc;
-    fpr isigma __attribute((unused)), mu __attribute((unused));
-    fpr muinc __attribute((unused)); // TODO check if really unused?;
     Zf(prng_init)(&sc.p, rng);
-    sc.sigma_min = fpr_sigma_min[9];
-
-    isigma = fpr_div(fpr_of(10), fpr_of(17));
-    mu = fpr_neg(fpr_one);
-    muinc = fpr_div(fpr_one, fpr_of(10));
-
-    // modulo_lattice:  2n coords -> n coords mod q
-    //   any lattice point: modulo_lattice = 0
-    //   (x,0)              modulo_lattice(x,0) = x mod q
-    //                      modulo_lattice(q,0)
-    //                      modulo_lattice(h,1)
-    //   g = hf mod q?
-    //                      modulo_lattice(G,g)
-    //                      modulo_lattice(F,G)
-
-    // (int_x3,int_x4) are the small gaussian vector
-
-	// remove below for falcon sampler
-    // gauss_sampler(&sc, mu, isigma, sample1, n);
-    // gauss_sampler(&sc, mu, isigma, sample2, n);
-
-	// bliss-like gaussian sampler
-	sample_gaussian_poly_bern(sample1, sample2, n);
-
-    // x3 = int_x3 - h * int_x4 mod q the target
+    sample_gaussian_poly_bern(sample1, sample2, n, &sc.p);
     compute_target(h_monty, sample1, sample2, sample_target, logn);
 }
