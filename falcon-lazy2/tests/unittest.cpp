@@ -110,9 +110,23 @@ TEST(falcon, lazy_sig) {
     double time_online = (t1 - t0)/1e9/1000.*1e6;
     std::cout << "offline time (us): " << time_offline << std::endl;
     std::cout << "online time (us): " << time_online << std::endl;
-    sign_dyn_lazy_online(sample1.data(), sample2.data(), orig_sample_target.data(), sig.data(),
-                         f_FFT.data(), g_FFT.data(), F_FFT.data(), G_FFT.data(), hm.data(), logn,
-                         nullptr);
+    // Correct usage: the online step returns 0 when the signature exceeds
+    // Falcon's norm bound; the caller must then discard the one-time offline
+    // token and regenerate. (Ignoring the return value occasionally emits an
+    // over-bound, invalid signature; see REVIEW.md C9.) This also makes the
+    // test independent of global rand() ordering.
+    (void)orig_sample_target;
+    int ok = 0;
+    for (int attempt = 0; attempt < 128 && !ok; ++attempt) {
+        sign_dyn_lazy_offline(&rng, key.f.data(), key.g.data(), key.F.data(), key.G.data(),
+                              key.h.data(), logn, sample1.data(), sample2.data(),
+                              sample_target.data(), f_FFT.data(), g_FFT.data(), F_FFT.data(),
+                              G_FFT.data());
+        ok = sign_dyn_lazy_online(sample1.data(), sample2.data(), sample_target.data(),
+                                  sig.data(), f_FFT.data(), g_FFT.data(), F_FFT.data(),
+                                  G_FFT.data(), hm.data(), logn, nullptr);
+    }
+    ASSERT_TRUE(ok);
     free(tmp);
     // compute the full uncompressed signature
     vec_modQ sigq = to_vec_modQ(sig);
@@ -152,21 +166,17 @@ TEST(falcon, sample_gaussian) {
     }
 }
 
-EXPORT void sample_gaussian_poly_bern(int8_t *sample1, int8_t *sample2, size_t n);
+EXPORT void sample_gaussian_poly_bern(int8_t *sample1, int8_t *sample2, size_t n, prng *p);
 
 TEST(falcon, sample_gaussian_poly_bern) {
     for (const uint64_t n: {512,1024}) {
-        //const uint64_t n = 1 << logn;
-        //inner_shake256_context rng;
-        //inner_shake256_init(&rng);
-        //double sigma = 2.; // between 1 and 2
-        //fpr isigma = FPR(1./sigma);
-        //sampler_context sc;
-        //Zf(prng_init)(&sc.p, &rng);
-        //sc.sigma_min = fpr_sigma_min[logn];
+        inner_shake256_context rng;
+        inner_shake256_init(&rng);
+        prng p;
+        Zf(prng_init)(&p, &rng);
         std::vector<int8_t> res1(n);
         std::vector<int8_t> res2(n);
-        sample_gaussian_poly_bern(res1.data(), res2.data(), n);
+        sample_gaussian_poly_bern(res1.data(), res2.data(), n, &p);
         std::vector<double> st(n);
         for (uint64_t i=0; i<n; ++i) st[i]=res1[i];
         double norm = print_statistics(st);
@@ -295,6 +305,43 @@ void uniform_random_modq(uint16_t* res, inner_shake256_context* rng, uint64_t n)
              r>=BOUND;
              shake256_extract(rng, &r, 8)) {}
         res[i] = r % F_Q;
+    }
+}
+
+/* C4 correctness oracle: a lazy signature must verify under Falcon's real
+ * verify_raw() bound (tighter than the 6000 proxy used elsewhere). */
+TEST(falcon, lazy_verify_realbound) {
+    for (const uint64_t logn: {9,10}) {
+        const uint64_t n = 1 << logn;
+        uint64_t seed = 1234;
+        inner_shake256_context rng;
+        shake256_init_prng_from_seed(&rng, &seed, 8);
+        falcon_key_t key = keygen(logn, &rng);
+        std::vector<uint16_t> hmonty = key.h;
+        falcon_inner_to_ntt_monty(hmonty.data(), logn);
+
+        std::vector<int8_t> sample1(n), sample2(n);
+        std::vector<uint16_t> sample_target(n);
+        std::vector<fpr> f_FFT(n), g_FFT(n), F_FFT(n), G_FFT(n);
+        std::vector<int16_t> sig(n);
+        std::vector<uint16_t> hm(n);
+        uint8_t* tmp = (uint8_t*) aligned_alloc(64, 1024*1024);
+
+        const int T = 64;
+        int passes = 0;
+        for (int t=0; t<T; ++t) {
+            uniform_random_modq(hm.data(), &rng, n);
+            sign_dyn_lazy_offline(&rng, key.f.data(), key.g.data(), key.F.data(), key.G.data(),
+                                  key.h.data(), logn, sample1.data(), sample2.data(),
+                                  sample_target.data(), f_FFT.data(), g_FFT.data(),
+                                  F_FFT.data(), G_FFT.data());
+            sign_dyn_lazy_online(sample1.data(), sample2.data(), sample_target.data(), sig.data(),
+                                 f_FFT.data(), g_FFT.data(), F_FFT.data(), G_FFT.data(),
+                                 hm.data(), logn, nullptr);
+            passes += falcon_inner_verify_raw(hm.data(), sig.data(), hmonty.data(), logn, tmp);
+        }
+        free(tmp);
+        ASSERT_EQ(passes, T);
     }
 }
 

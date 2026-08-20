@@ -1,1 +1,13 @@
 falcon-lazy2/googletest
+
+# Build artifacts
+*.o
+*.su
+build/
+falcon-lazy2/build*/
+
+# macOS
+.DS_Store
+
+# Local convenience symlink recreated by falcon-lazy2/resync.sh (not committed)
+falcon-lazy2/dilithium

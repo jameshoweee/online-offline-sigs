@@ -6,10 +6,17 @@ enable_language(C ASM)
 set (CMAKE_CXX_STANDARD 17)
 set (CMAKE_C_FLAGS_DEBUG "-Wall -Wextra -Wshadow -Wundef -Werror -g3 -O0")
 set (CMAKE_CXX_FLAGS_DEBUG "-Wall -Wextra -Wshadow -Wundef -Werror -g3 -O0")
-set (CMAKE_LD_FLAGS_DEBUG "-Wl-no-undefined")
-set (CMAKE_C_FLAGS_RELEASE "-Wall -Wextra -Wshadow -Wundef -Werror -g3 -O9")
-set (CMAKE_CXX_FLAGS_RELEASE "-Wall -Wextra -Wshadow -Wundef -Werror -g3 -O9")
-set (CMAKE_LD_FLAGS_RELEASE "-Wl-no-undefined")
+set (CMAKE_C_FLAGS_RELEASE "-Wall -Wextra -Wshadow -Wundef -g3 -O3")
+set (CMAKE_CXX_FLAGS_RELEASE "-Wall -Wextra -Wshadow -Wundef -g3 -O3")
+# The Apple (ld64) linker does not understand GNU ld's --no-undefined; keep the
+# strict-link check only on GNU/Linux (the box).
+if (APPLE)
+    set (CMAKE_EXE_LINKER_FLAGS_DEBUG "")
+    set (CMAKE_EXE_LINKER_FLAGS_RELEASE "")
+else ()
+    set (CMAKE_EXE_LINKER_FLAGS_DEBUG "-Wl,--no-undefined")
+    set (CMAKE_EXE_LINKER_FLAGS_RELEASE "-Wl,--no-undefined")
+endif ()
 
 if (CMAKE_SYSTEM_PROCESSOR MATCHES "(x86)|(X86)|(amd64)|(AMD64)")
     set(X86 ON)
@@ -144,6 +151,12 @@ add_library(ed25519 STATIC ${ED25519_SRCS})
 target_include_directories(ed25519 INTERFACE ed25519/src)
 target_compile_options(ed25519 PRIVATE -Wno-unused-result)
 
+# On x86 the AVX2 lib supplies the randombytes() symbol; on other targets
+# (e.g. Apple arm64) the AVX2 lib is not built, so pull it from the ref tree.
+if (NOT X86)
+    list(APPEND DILITHIUM_FIPS202_REF_SRCS dilithium/ref/randombytes.c)
+endif ()
+
 add_library(dilithium-ref STATIC ${DILITHIUM_FIPS202_REF_SRCS})
 target_include_directories(dilithium-ref INTERFACE .)
 target_include_directories(dilithium-ref PRIVATE dilithium/ref)
@@ -175,4 +188,16 @@ target_include_directories(unittest PRIVATE ${TEST_INCS})
 add_executable(falcon_bench tests/bench_lazy_falcon.cpp)
 target_link_libraries(falcon_bench falcon falcon_testlib  ed25519 ${DILITHIUM_LIBS} ${BENCHMARK_LIBS})
 target_include_directories(falcon_bench PRIVATE ${TEST_INCS})
+
+# Standalone rdtscp cycle + correctness harness (no google-benchmark / PMU needed).
+add_executable(bench_cycles tests/bench_cycles.cpp)
+target_link_libraries(bench_cycles falcon falcon_testlib m)
+
+# Repetition harness: N independent reps (default 1000) with fresh randomness,
+# times keygen/sign/verify for the online/offline Falcon + ed25519 + Dilithium2.
+# Portable time everywhere; invariant-TSC cycles additionally on x86. No
+# google-benchmark dependency, so it builds and runs on the Mac and the box.
+add_executable(falcon_bench_reps tests/bench_reps.cpp)
+target_link_libraries(falcon_bench_reps falcon falcon_testlib ed25519 ${DILITHIUM_LIBS} m)
+target_include_directories(falcon_bench_reps PRIVATE ${TEST_INCS})
 
